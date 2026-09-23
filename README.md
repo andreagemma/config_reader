@@ -1,0 +1,228 @@
+# configreader
+
+Python library to read configuration values from multiple sources with configurable precedence.
+
+Supported sources:
+- INI file
+- SQL database through SQLAlchemy (optional)
+- environment variables
+- in-memory Python dictionary
+
+Values are resolved in order, and the first non-empty match is returned.
+
+## Installation
+
+### From PyPI
+
+```bash
+pip install ga-configreader
+```
+
+### From source
+
+```bash
+git clone https://github.com/andreagemma/configreader.git
+cd configreader
+pip install -e .
+```
+
+### Database support (optional)
+
+Install SQLAlchemy if you want to use the DB provider:
+
+```bash
+pip install sqlalchemy
+```
+
+Or install the project with DB extras:
+
+```bash
+pip install "configreader[db]"
+```
+
+## Quickstart
+
+```python
+from configreader import ConfigReader
+
+reader = ConfigReader(
+    file="config.ini",
+    use_env=True,
+    env_default_section="APP",
+    dictionary={"DEFAULT": {"timeout": "30"}},
+    providers=["env", "ini", "dict"],
+    cached=True,
+)
+
+host = reader.get("host", default="127.0.0.1")
+port = reader.getint("port", default=8080)
+debug = reader.getboolean("debug", default=False)
+```
+
+## Provider Precedence
+
+The providers list defines lookup order.
+
+Example:
+
+```python
+providers = ["env", "db", "ini", "dict"]
+```
+
+Meaning:
+1. check environment first
+2. then check database
+3. then check INI file
+4. then check dictionary
+
+## Environment Variables
+
+Naming rules:
+- environment variables are read as SECTION_NAME, using the requested section name as prefix
+- with the default section, this means DEFAULT_NAME unless you set env_default_section or pass an empty section
+
+Examples:
+- reader.get("host") reads DEFAULT_HOST
+- reader.get("host", section="app") reads APP_HOST
+- ConfigReader(env_default_section="APP").get("host") reads APP_HOST
+- reader.get("host", section="") reads HOST first, then DEFAULT_HOST
+
+## Using INI Files
+
+Example config.ini:
+
+```ini
+[DEFAULT]
+host = localhost
+port = 5432
+debug = true
+items = [1, 2, 3]
+
+[app]
+workers = 4
+```
+
+Code:
+
+```python
+reader = ConfigReader(file="config.ini")
+
+host = reader.get("host")
+port = reader.getint("port")
+debug = reader.getboolean("debug")
+items = reader.getlist("items")
+workers = reader.getint("workers", section="app")
+```
+
+## Using a Dictionary
+
+```python
+reader = ConfigReader(
+    dictionary={
+        "DEFAULT": {
+            "host": "localhost",
+            "allowed": "['admin', 'user']",
+        },
+        "service": {
+            "retries": "3",
+        },
+    },
+    providers=["dict"],
+)
+
+allowed = reader.getlist("allowed")
+retries = reader.getint("retries", section="service")
+```
+
+## Using a Database
+
+Constructor:
+
+```python
+reader = ConfigReader(
+    db_url="sqlite:///settings.db",
+    db_query="SELECT value FROM settings WHERE section = :section AND name = :name",
+    providers=["db", "env"],
+)
+```
+
+Default query shape:
+
+```sql
+SELECT value FROM settings WHERE section = :section AND name = :name
+```
+
+DB utility methods:
+
+```python
+ok = ConfigReader.check_db_connection("sqlite:///settings.db")
+exists = ConfigReader.check_db_exists("sqlite:///settings.db", table_name="settings")
+```
+
+## Main API
+
+- `get(name, default=None, section="DEFAULT") -> str | None`
+- `getint(name, default=None, section="DEFAULT") -> int | None`
+- `getboolean(name, default=None, section="DEFAULT") -> bool | None`
+- `getfloat(name, default=None, section="DEFAULT") -> float | None`
+- `getlist(name, default=None, section="DEFAULT") -> list[Any] | None`
+- `getset(name, default=None, section="DEFAULT") -> set[Any] | None`
+- `gettuple(name, default=None, section="DEFAULT") -> tuple[Any, ...] | None`
+- `getdict(name, default=None, section="DEFAULT") -> dict[Any, Any] | None`
+- `sections() -> list[str]` merged section names across enabled providers
+- `variables(section) -> list[str]` merged variable names for a section across enabled providers
+- `items()` iterator over loaded INI entries
+- `refresh(on_cache_exists="warining") -> None` reload providers and rebuild cache
+- `cache(on_cache_exists="warining") -> None` build cache on demand
+- `copy(copy_cache=False, on_cache_exists="warining") -> ConfigReader`
+
+## Cache Behavior
+
+- By default `cached=True`, so values are snapshotted at initialization for enabled providers.
+- With cache enabled, `get`, `items`, `sections`, and `variables` read from cache.
+- Call `refresh()` to reload providers and rebuild cache.
+- Use `cache()` to create cache on demand when `cached=False`.
+- For `refresh`, `cache`, and `copy(copy_cache=True)`, `on_cache_exists` controls behavior when cache is missing:
+    - `"ignore"`: no warning or error
+    - `"warning"`: emit `RuntimeWarning` (default)
+    - `"raise"`: raise `RuntimeError`
+- The default is `"warining"` for backward compatibility and is normalized to `"warning"`.
+
+Full details in [docs/api.md](docs/api.md).
+
+## Errors And Type Conversion
+
+- `FileNotFoundError` is raised if the provided INI file does not exist.
+- Typed getters (`getint`, `getfloat`, `getlist`, etc.) propagate parsing/conversion errors.
+- If SQLAlchemy is not installed, DB features are unavailable.
+
+## Development
+
+Install development dependencies:
+
+```bash
+pip install -e .[dev]
+```
+
+Run tests:
+
+```bash
+pytest
+```
+
+## More Documentation
+
+- [docs/overview.md](docs/overview.md)
+- [docs/providers.md](docs/providers.md)
+- [docs/api.md](docs/api.md)
+- [docs/examples.md](docs/examples.md)
+
+## License
+
+Distributed under the MIT License. See [LICENSE](LICENSE).
+
+Third-party dependency notices and archived license files are available in:
+
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+- [licenses/third_party/summary.tsv](licenses/third_party/summary.tsv)
+- [licenses/third_party/packages/](licenses/third_party/packages)
