@@ -140,6 +140,8 @@ class ConfigReader:
 
     @staticmethod
     def _normalize_cache_mode(on_cache_exists: str) -> str:
+        # Normalize user policy and keep backward compatibility with legacy typo.
+        """Internal helper: normalize cache mode."""
         value = on_cache_exists.strip().lower()
         if value == "warining":
             return "warning"
@@ -148,6 +150,8 @@ class ConfigReader:
         return value
 
     def _handle_missing_cache(self, action: str, on_cache_exists: str) -> None:
+        # Apply policy when cache-dependent operations are requested too early.
+        """Internal helper: handle missing cache."""
         mode = self._normalize_cache_mode(on_cache_exists)
         if mode == "ignore":
             return
@@ -158,9 +162,13 @@ class ConfigReader:
 
     @staticmethod
     def _norm_key(value: str) -> str:
+        # Use uppercase keys to keep lookups provider-agnostic.
+        """Internal helper: norm key."""
         return str(value).upper()
 
     def _build_cache(self) -> None:
+        # Build per-provider normalized maps to accelerate repeated reads.
+        """Internal helper: build cache."""
         provider_cache: dict[ConfigSource, dict[str, dict[str, str]]] = {
             ConfigSource.INI: {},
             ConfigSource.DB: {},
@@ -170,6 +178,7 @@ class ConfigReader:
         ini_items: list[tuple[str, str, str]] = []
 
         if self.use_dict and self.dictionary:
+            # Materialize dictionary provider as uppercase section/name pairs.
             for section, values in self.dictionary.items():
                 sec_key = self._norm_key(str(section))
                 section_cache = provider_cache[ConfigSource.DICT].setdefault(sec_key, {})
@@ -177,6 +186,7 @@ class ConfigReader:
                     section_cache[self._norm_key(str(name))] = str(value)
 
         if self.use_ini:
+            # Include DEFAULT values and all explicit INI sections.
             defaults = self.config.defaults()
             if defaults:
                 default_cache = provider_cache[ConfigSource.INI].setdefault("DEFAULT", {})
@@ -193,6 +203,7 @@ class ConfigReader:
                     ini_items.append((section, name, text_value))
 
         if self.use_db and self.db_session and text is not None:
+            # Snapshot DB-backed settings section by section.
             for section in self._sections_from_db():
                 section_cache = provider_cache[ConfigSource.DB].setdefault(section, {})
                 for name in self._names_from_db(section):
@@ -201,6 +212,7 @@ class ConfigReader:
                         section_cache[self._norm_key(name)] = str(value)
 
         if self.use_env:
+            # Cache environment with normalized keys for fast prefix matching.
             env_cache = {self._norm_key(key): str(value) for key, value in os.environ.items()}
 
         self._cache_values = provider_cache
@@ -209,6 +221,8 @@ class ConfigReader:
         self._cache_ready = True
 
     def _get_from_cache(self, section: str, name: str) -> str | None:
+        # Respect provider priority order while serving from prebuilt caches.
+        """Internal helper: get from cache."""
         section_key = self._norm_key(section)
         name_key = self._norm_key(name)
         for provider in self.order:
@@ -298,16 +312,22 @@ class ConfigReader:
                 yield sec, name, value
 
     def _sections_from_ini(self) -> list[str]:
+        # Read available INI sections as uppercase labels.
+        """Internal helper: sections from ini."""
         if not self.use_ini:
             return []
         return [sec.upper() for sec in self.config.sections()]
 
     def _sections_from_dict(self) -> list[str]:
+        # Read available dictionary sections as uppercase labels.
+        """Internal helper: sections from dict."""
         if not self.use_dict or not self.dictionary:
             return []
         return [str(sec).upper() for sec in self.dictionary.keys()]
 
     def _sections_from_db(self) -> list[str]:
+        # Query distinct DB sections; fail soft on SQL errors.
+        """Internal helper: sections from db."""
         if not self.use_db or not self.db_session or text is None:
             return []
         try:
@@ -317,6 +337,8 @@ class ConfigReader:
             return []
 
     def _sections_from_env(self) -> list[str]:
+        # Expose env default section only when matching variables exist.
+        """Internal helper: sections from env."""
         if not self.use_env:
             return []
         return (
@@ -354,6 +376,8 @@ class ConfigReader:
         return sorted(merged)
 
     def _names_from_ini(self, section: str) -> list[str]:
+        # Resolve variable names for one INI section, handling DEFAULT specially.
+        """Internal helper: names from ini."""
         if not self.use_ini:
             return []
         sec = section.upper()
@@ -365,6 +389,8 @@ class ConfigReader:
         return [name.upper() for name in self.config.options(target)]
 
     def _names_from_dict(self, section: str) -> list[str]:
+        # Resolve variable names for one dictionary section.
+        """Internal helper: names from dict."""
         if not self.use_dict or not self.dictionary:
             return []
         sec = section.upper()
@@ -374,6 +400,8 @@ class ConfigReader:
         return []
 
     def _names_from_db(self, section: str) -> list[str]:
+        # Resolve DB variable names with a case-tolerant section lookup.
+        """Internal helper: names from db."""
         if not self.use_db or not self.db_session or text is None:
             return []
         try:
@@ -391,6 +419,8 @@ class ConfigReader:
             return []
 
     def _names_from_env(self, section: str) -> list[str]:
+        # Resolve env variable names by stripping SECTION_ prefixes.
+        """Internal helper: names from env."""
         if not self.use_env:
             return []
         sec = section.upper()
@@ -451,6 +481,7 @@ class ConfigReader:
         if not self.db_url:
             raise ValueError("Database URL is not provided")
         try:
+            # Keep one lightweight session for point lookups.
             engine = create_engine(self.db_url)
             Session = sessionmaker(bind=engine)
             self.db_session = Session()
@@ -520,6 +551,7 @@ class ConfigReader:
             return None
         if not self.dictionary:
             return None
+        # Dictionary values are normalized to string outputs.
         value = self.dictionary.get(section, {}).get(name)
         return str(value) if value is not None else None
 
@@ -546,6 +578,7 @@ class ConfigReader:
         if text is None:
             return None
         try:
+            # Execute parameterized lookup to avoid string-interpolated SQL.
             statement = text(self.db_query)
             result = self.db_session.execute(statement, {"name": name, "section": section}).scalar_one_or_none()
             return result if isinstance(result, str) else (str(result) if result is not None else None)
@@ -568,6 +601,7 @@ class ConfigReader:
         """
         if not self.use_ini:
             return None
+        # Let ConfigParser handle missing entries via fallback.
         return self.config.get(section, name, fallback=None)
 
     def _get_from_env(self, section: str, name: str) -> str | None:
@@ -590,6 +624,7 @@ class ConfigReader:
         """
         if not self.use_env:
             return None
+        # Match env naming convention by section/default-section rules.
         section_name = section.strip()
         default_key = f"{self.env_default_section}_{name}".upper()
         if section_name == "":
